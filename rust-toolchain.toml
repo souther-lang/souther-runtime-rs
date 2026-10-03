@@ -1,0 +1,8 @@
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
+# Clippy and rustfmt, because the build is what checks the lints and the layout.
+components = ["clippy", "rustfmt"]
+# A target with no `std`, which is what says the crates are `no_std`: a WebAssembly runtime that
+# depends on them has none, and wasm32-unknown-unknown has one, so building for it would not say so.
+targets = ["wasm32v1-none"]

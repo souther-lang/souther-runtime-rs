@@ -1,0 +1,34 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The toolchain comes from rust-toolchain.toml, which rustup reads when cargo is first run.
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      # A target with no `std`: what says the crates build where a runtime has none.
+      - run: cargo build --locked --release --target wasm32v1-none
+
+  oldest-rust:
+    # The rust-version the workspace says it builds with, read from where it is said, so that a
+    # runtime pinned to an older Rust than this repository's own learns of a crate it cannot build
+    # here and not from its own build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the oldest Rust the crates say they build with
+        id: oldest
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$version"
+          echo "rust=$version" >> "$GITHUB_OUTPUT"
+      - run: rustup toolchain install ${{ steps.oldest.outputs.rust }} --profile minimal
+      - run: cargo +${{ steps.oldest.outputs.rust }} build --locked
