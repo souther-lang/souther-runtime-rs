@@ -29,11 +29,40 @@ use num_traits::{ToPrimitive, Zero};
 /// while it is a multiple of it.
 const FIVE_TO_27: u128 = 7_450_580_596_923_828_125;
 
-fn u128_gcd(mut one: u128, mut two: u128) -> u128 {
-    while two != 0 {
-        (one, two) = (two, one % two);
+/// A value here takes a greatest common divisor every time one is made, so this is on the way of
+/// every operation. Where both fit in 64 bits it divides in them, which is one instruction; past
+/// that it shifts and subtracts and never divides, because a division of `u128`s is a routine of
+/// many steps, and on WebAssembly, which has no multiply wider than 64 bits, a slow one.
+fn u128_gcd(one: u128, two: u128) -> u128 {
+    if let (Ok(mut one), Ok(mut two)) = (u64::try_from(one), u64::try_from(two)) {
+        while two != 0 {
+            (one, two) = (two, one % two);
+        }
+        return u128::from(one);
     }
-    one
+    if one == 0 || two == 0 {
+        return one | two;
+    }
+    let shared = (one | two).trailing_zeros();
+    let (mut one, mut two) = (one >> one.trailing_zeros(), two >> two.trailing_zeros());
+    // Both odd from here on, so their difference is even and nought only where they are equal.
+    while one != two {
+        if one > two {
+            (one, two) = (two, one);
+        }
+        two -= one;
+        two >>= two.trailing_zeros();
+    }
+    one << shared
+}
+
+/// Divided with what is left over, in 64 bits where both fit in them: one instruction where a
+/// division of `u128`s is a routine, and nearly every value here fits.
+fn u128_div_rem(one: u128, two: u128) -> (u128, u128) {
+    match (u64::try_from(one), u64::try_from(two)) {
+        (Ok(one), Ok(two)) => (u128::from(one / two), u128::from(one % two)),
+        _ => (one / two, one % two),
+    }
 }
 
 /// Ten to each power a `u128` holds, from nought to 38.
@@ -266,7 +295,10 @@ impl Magnitude {
     /// The quotient and the remainder of `self` over `divisor`, which is not nought.
     pub fn div_rem(&self, divisor: &Magnitude) -> (Magnitude, Magnitude) {
         match (&self.0, &divisor.0) {
-            (Small(one), Small(two)) => (Magnitude(Small(one / two)), Magnitude(Small(one % two))),
+            (Small(one), Small(two)) => {
+                let (quotient, remainder) = u128_div_rem(*one, *two);
+                (Magnitude(Small(quotient)), Magnitude(Small(remainder)))
+            }
             // A dividend a `u128` holds over one it does not is nought, all of it left over.
             (Small(_), Wide(_)) => (Magnitude::ZERO, self.clone()),
             (Wide(dividend), Small(small)) => {

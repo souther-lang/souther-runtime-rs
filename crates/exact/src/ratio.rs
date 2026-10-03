@@ -107,9 +107,27 @@ fn over(left: &Magnitude, right: &Magnitude) -> Magnitude {
 /// Between which two counts of bits five to `fives`, which is not below nought, is wide.
 fn power_bits(fives: i128) -> (i128, i128) {
     (
-        fives * LOG2_5_BELOW / PLACES + 1,
-        fives * LOG2_5_ABOVE / PLACES + 1,
+        times_log2_5(fives, LOG2_5_BELOW) + 1,
+        times_log2_5(fives, LOG2_5_ABOVE) + 1,
     )
+}
+
+/// `fives · log2 5`, from `log2_5` one of the two bounds of it, rounded towards nought.
+///
+/// Every order and every rounding asks this of both values, mostly of a power of five that is
+/// nought or a few, so it is answered there without dividing `i128`s: that is a routine of many
+/// steps on every target and a slow one on WebAssembly, where nought times anything still went
+/// through it. A product in 64 bits is divided in them, which rounds the same way.
+fn times_log2_5(fives: i128, log2_5: i128) -> i128 {
+    /// The most fives whose product with either bound an `i64` holds.
+    const NARROW: i128 = i64::MAX as i128 / LOG2_5_ABOVE;
+    if fives == 0 {
+        return 0;
+    }
+    if (-NARROW..=NARROW).contains(&fives) {
+        return i128::from((fives * log2_5) as i64 / PLACES as i64);
+    }
+    fives * log2_5 / PLACES
 }
 
 /// The bits `whole × 2^twos × 5^fives` is at most wide, without building it.
@@ -172,13 +190,13 @@ fn log_bounds(
     let across = numerator.bits() as i128 - denominator.bits() as i128 + twos;
     let (low, high) = if fives >= 0 {
         (
-            fives * LOG2_5_BELOW / PLACES,
-            fives * LOG2_5_ABOVE / PLACES + 1,
+            times_log2_5(fives, LOG2_5_BELOW),
+            times_log2_5(fives, LOG2_5_ABOVE) + 1,
         )
     } else {
         (
-            fives * LOG2_5_ABOVE / PLACES - 1,
-            fives * LOG2_5_BELOW / PLACES,
+            times_log2_5(fives, LOG2_5_ABOVE) - 1,
+            times_log2_5(fives, LOG2_5_BELOW),
         )
     };
     (across - 1 + low, across + 1 + high)
@@ -830,6 +848,36 @@ mod tests {
                 fives,
             );
             assert_eq!(stored, value);
+        }
+    }
+
+    /// What a power of five is times `log2 5` is the same whichever width it is worked out in,
+    /// on both sides of the edge where 64 bits give way and at the ends of an exponent.
+    #[test]
+    fn a_power_of_fives_logarithm_is_the_same_in_any_width() {
+        let narrow = i64::MAX as i128 / LOG2_5_ABOVE;
+        let mut every = vec![
+            0,
+            1,
+            -1,
+            2,
+            -3,
+            27,
+            -40,
+            i128::from(i64::MAX),
+            i128::from(i64::MIN),
+        ];
+        for edge in [narrow, -narrow] {
+            every.extend([edge - 1, edge, edge + 1]);
+        }
+        for fives in every {
+            for log2_5 in [LOG2_5_BELOW, LOG2_5_ABOVE] {
+                assert_eq!(
+                    times_log2_5(fives, log2_5),
+                    fives * log2_5 / PLACES,
+                    "{fives}"
+                );
+            }
         }
     }
 
