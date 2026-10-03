@@ -698,7 +698,10 @@ mod tests {
             assert_eq!(one.divide(&d("1"), past, mode), None, "{mode:?}");
         }
         assert_eq!(one.add(&Amount::of_parts(false, &[1], past as i32)), None);
-        assert_eq!(one.subtract(&Amount::of_parts(false, &[1], past as i32)), None);
+        assert_eq!(
+            one.subtract(&Amount::of_parts(false, &[1], past as i32)),
+            None
+        );
     }
 
     /// Every mode against the rows `java.math.RoundingMode`'s own documentation tabulates.
@@ -902,7 +905,14 @@ mod tests {
     /// A value read into a `Rational` and narrowed back at its own scale is the value it was.
     #[test]
     fn a_value_is_the_value_its_rational_narrows_back_to() {
-        for value in ["0", "-0.00", "1.50", "-12.345", "1e2", "123456789012345678901234567890.1"] {
+        for value in [
+            "0",
+            "-0.00",
+            "1.50",
+            "-12.345",
+            "1e2",
+            "123456789012345678901234567890.1",
+        ] {
             let read = d(value);
             let back = Ratio::of_decimal(read.scaled())
                 .to_decimal(i64::from(read.scale()), Rounding::Down)
