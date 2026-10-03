@@ -71,6 +71,11 @@ fn scaled_up(magnitude: &Magnitude, by: u64) -> Option<Magnitude> {
     if magnitude.is_zero() || by == 0 {
         return Some(magnitude.clone());
     }
+    // Ten to `by` is narrower than four bits a power, so a product that wide is surely held, and
+    // is built without the estimate or the width asked of it: nearly every raise is a place or two.
+    if magnitude.bits() + 4 * by <= WIDEST {
+        return Some(magnitude.times_ten_to(by));
+    }
     let narrowest = (magnitude.bits() - 1) as f64 + (by as f64) * LOG2_10 - 1.0;
     if narrowest > WIDEST as f64 {
         return None;

@@ -78,10 +78,7 @@ fn u64_digits(mut word: u64) -> String {
             break;
         }
     }
-    written[at..]
-        .iter()
-        .map(|&digit| char::from(digit))
-        .collect()
+    String::from(core::str::from_utf8(&written[at..]).expect("a digit is ASCII"))
 }
 
 /// Ten to each power a `u128` holds, from nought to 38.
@@ -312,6 +309,16 @@ impl Magnitude {
     pub fn times_ten_to(&self, by: u64) -> Magnitude {
         if self.is_zero() || by == 0 {
             return self.clone();
+        }
+        // In 64 bits where the value and the power are a `u64`'s, which is one multiply where a
+        // `u128`'s is several on WebAssembly: an amount raised to another's scale is nearly always.
+        if let Small(small) = &self.0
+            && let Ok(word) = u64::try_from(*small)
+            && let Some(ten) = TENS.get(by as usize)
+            && let Ok(ten) = u64::try_from(*ten)
+            && let Some(raised) = word.checked_mul(ten)
+        {
+            return Magnitude(Small(u128::from(raised)));
         }
         if let Small(small) = &self.0
             && let Some(ten) = TENS.get(by as usize)
