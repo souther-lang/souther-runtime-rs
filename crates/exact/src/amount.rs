@@ -21,8 +21,7 @@
 //! building it ([`WIDEST`]).
 
 use crate::{Dropped, Magnitude, Rounding, Scaled, TENS, WIDEST, dropped, rounded};
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -40,6 +39,21 @@ pub struct Amount {
     negative: bool,
     magnitude: Magnitude,
     scale: i32,
+}
+
+/// The pieces written one after another into one allocation. Not `format!`, whose machinery a
+/// runtime would carry and run for what is only copying.
+fn joined(pieces: &[&str]) -> String {
+    let mut text = String::with_capacity(pieces.iter().map(|piece| piece.len()).sum());
+    for piece in pieces {
+        text.push_str(piece);
+    }
+    text
+}
+
+/// That many zeros written after the text.
+fn zeros(text: &mut String, many: usize) {
+    text.extend(core::iter::repeat_n('0', many));
 }
 
 /// `log2(10)`, for how many bits a power of ten is wide.
@@ -186,7 +200,7 @@ impl Amount {
     pub fn unscaled_text(&self) -> String {
         let digits = self.magnitude.digits();
         if self.negative {
-            format!("-{digits}")
+            joined(&["-", &digits])
         } else {
             digits
         }
@@ -456,16 +470,20 @@ impl Amount {
         let scale = i64::from(self.scale);
         Some(if scale <= 0 {
             if self.is_zero() {
-                "0".to_string()
+                String::from("0")
             } else {
-                format!("{sign}{digits}{}", "0".repeat((-scale) as usize))
+                let mut text = joined(&[sign, &digits]);
+                zeros(&mut text, (-scale) as usize);
+                text
             }
         } else if digits.len() as i64 > scale {
             let point = digits.len() - scale as usize;
-            format!("{sign}{}.{}", &digits[..point], &digits[point..])
+            joined(&[sign, &digits[..point], ".", &digits[point..]])
         } else {
-            let zeros = "0".repeat(scale as usize - digits.len());
-            format!("{sign}0.{zeros}{digits}")
+            let mut text = joined(&[sign, "0."]);
+            zeros(&mut text, scale as usize - digits.len());
+            text.push_str(&digits);
+            text
         })
     }
 
@@ -516,7 +534,7 @@ impl Amount {
         let digits = self.magnitude.digits();
         let sign = if self.negative { "-" } else { "" };
         if self.scale == 0 {
-            return format!("{sign}{digits}");
+            return joined(&[sign, &digits]);
         }
         let scale = i64::from(self.scale);
         let adjusted = -scale + (digits.len() as i64 - 1);
@@ -524,23 +542,23 @@ impl Amount {
             let point = digits.len() as i64 - scale;
             return if point > 0 {
                 let point = point as usize;
-                format!("{sign}{}.{}", &digits[..point], &digits[point..])
+                joined(&[sign, &digits[..point], ".", &digits[point..]])
             } else {
-                format!("{sign}0.{}{digits}", "0".repeat((-point) as usize))
+                let mut text = joined(&[sign, "0."]);
+                zeros(&mut text, (-point) as usize);
+                text.push_str(&digits);
+                text
             };
         }
         let (first, rest) = digits.split_at(1);
-        let mut written = format!("{sign}{first}");
+        let mut written = joined(&[sign, first]);
         if !rest.is_empty() {
             written.push('.');
             written.push_str(rest);
         }
         if adjusted != 0 {
-            written.push('E');
-            if adjusted > 0 {
-                written.push('+');
-            }
-            written.push_str(&adjusted.to_string());
+            written.push_str(if adjusted > 0 { "E+" } else { "E-" });
+            written.push_str(&Magnitude::of_u128(u128::from(adjusted.unsigned_abs())).digits());
         }
         written
     }
