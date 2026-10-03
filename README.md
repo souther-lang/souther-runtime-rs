@@ -21,7 +21,10 @@ Something moves here when it is the same computation written a second time, not 
 - `souther-exact`: exact arithmetic. The whole numbers a `Decimal` is worked out with, which of
   two neighbours a rounding mode answers, and the `Rational` that `/` answers — its one canonical
   form, the four operations, the order and the narrowings (spec §stdlib-rational). Moved from the
-  native runtime when the WebAssembly runtime came to need the same `Rational`.
+  native runtime when the WebAssembly runtime came to need the same `Rational`. And the `Decimal`
+  itself (`Amount`): what each operation on one answers, the widest whole number one holds, and
+  the text it is written as (spec §primitives, §stdlib-decimal). Moved from the native runtime
+  when the WebAssembly runtime's own copy turned out to hold no widest whole number.
 
 ## Depending on it
 
