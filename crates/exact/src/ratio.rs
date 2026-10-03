@@ -19,7 +19,7 @@
 //! it was, so that neither can be taken for the other, and how each ends a run is the runtime's.
 //!
 //! Nothing here knows where a value is kept. A runtime stores the parts [`Ratio::parts`] answers in
-//! whatever layout it has, and reads them back with [`Ratio::from_stored`].
+//! whatever layout it has, and reads them back with [`Ratio::from_trusted_parts`].
 
 use crate::WIDEST;
 use crate::enclosure::Enclosure;
@@ -274,12 +274,17 @@ impl Ratio {
         .expect("every Decimal has a rational")
     }
 
-    /// The value a runtime stored the [`Ratio::parts`] of.
+    /// The value a runtime stored the [`Ratio::parts`] of, read back from where it stored them.
     ///
-    /// Taken as they are, since they were a value's own: putting parts back in their one form is
-    /// the work every operation has already done, and reading a stored value is not an operation.
-    /// Parts that are not one value's own make a value no operation here answers for.
-    pub fn from_stored(
+    /// Trusted and not checked, which is what the name says: putting parts back in their one form
+    /// is the work every operation has already done, and reading a stored value is not an
+    /// operation, so it is not done again on every read. That makes these parts the caller's to
+    /// vouch for. Only what [`Ratio::parts`] answered is a value here; anything else — a nought
+    /// denominator, a nought below nought, a common factor, a whole number past [`WIDEST`] — makes
+    /// one no operation answers for. A debug build checks it; a release build does not. There is
+    /// no constructor for parts from anywhere else, because nothing reads a `Rational` from
+    /// outside a runtime: the language gives it no external form.
+    pub fn from_trusted_parts(
         negative: bool,
         numerator: Magnitude,
         denominator: Magnitude,
@@ -293,7 +298,7 @@ impl Ratio {
                 denominator.clone(),
                 i128::from(twos),
                 i128::from(fives),
-                u64::MAX,
+                WIDEST,
             )
             .is_ok_and(|it| it
                 == Ratio {
@@ -817,7 +822,7 @@ mod tests {
             of_decimal(false, 1, i32::MAX),
         ] {
             let (negative, numerator, denominator, twos, fives) = value.parts();
-            let stored = Ratio::from_stored(
+            let stored = Ratio::from_trusted_parts(
                 negative,
                 numerator.clone(),
                 denominator.clone(),
@@ -825,6 +830,26 @@ mod tests {
                 fives,
             );
             assert_eq!(stored, value);
+        }
+    }
+
+    /// Parts no value has are refused by a debug build, each kind of them. A whole number past
+    /// [`WIDEST`] is not among them only because writing one down takes a quarter of a gigabyte.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn parts_no_value_has_are_refused_where_they_are_checked() {
+        let n = Magnitude::of_u128;
+        for (what, negative, numerator, denominator, twos) in [
+            ("over nought", false, n(1), Magnitude::ZERO, 0),
+            ("nought below nought", true, Magnitude::ZERO, n(1), 0),
+            ("a common factor", false, n(3), n(9), 0),
+            ("a two left in", false, n(6), n(7), 0),
+            ("a five left in", false, n(1), n(15), 3),
+        ] {
+            let read = std::panic::catch_unwind(|| {
+                Ratio::from_trusted_parts(negative, numerator, denominator, twos, 0)
+            });
+            assert!(read.is_err(), "parts {what} were taken as a value");
         }
     }
 

@@ -33,6 +33,15 @@ souther-exact = { git = "https://github.com/souther-lang/souther-runtime-rs", re
 A commit and not a branch, so that moving to a newer one is a change of what the runtime computes
 that a commit of the runtime says.
 
+What the commit fixes is this repository's source, which is what states the answers. It does not
+fix the versions of the crates that source depends on: a library's `Cargo.lock` binds nothing
+downstream, so each runtime resolves `num-bigint` and the rest in its own lock, and two runtimes on
+one commit can hold different patch releases of them. That is allowed on purpose. What they are
+asked for is whole-number arithmetic, whose answers no correct release changes; an exact `=`
+requirement would buy no different answer and would refuse every runtime whose other dependencies
+asked for a neighbouring release. A runtime that wants the same release as another says so in its
+own lock.
+
 ## Building
 
     cargo test
