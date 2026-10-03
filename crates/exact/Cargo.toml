@@ -1,0 +1,16 @@
+[package]
+name = "souther-exact"
+version = "0.1.0"
+description = "Exact arithmetic as the Souther language states it: Decimal's whole numbers, rounding, and Rational"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-bigint.workspace = true
+num-integer.workspace = true
+num-traits.workspace = true
+
+[lints]
+workspace = true
