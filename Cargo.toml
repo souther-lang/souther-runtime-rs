@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/exact",
+]
+
+[workspace.package]
+edition = "2024"
+# The oldest Rust these crates build with: `if let` chains, which edition 2024 has from 1.88. A
+# runtime that depends on them builds with its own toolchain, and this is the most it may be asked
+# to be.
+rust-version = "1.88"
+license = "EPL-2.0"
+repository = "https://github.com/souther-lang/souther-runtime-rs"
+
+[workspace.lints.clippy]
+unnecessary_wraps = "deny"
+
+[workspace.dependencies]
+# Without `std`: the WebAssembly runtime has none, and what these are asked for needs only `alloc`.
+num-bigint = { version = "0.5", default-features = false }
+num-integer = { version = "0.1", default-features = false }
+num-traits = { version = "0.2", default-features = false }
