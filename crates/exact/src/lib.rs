@@ -12,13 +12,16 @@
 
 extern crate alloc;
 
+mod amount;
 mod enclosure;
 mod magnitude;
 mod ratio;
 mod rounding;
 
+pub use amount::Amount;
 pub use magnitude::{Magnitude, TENS};
-pub use ratio::{Exact, Failure, Ratio, Scaled};
+pub(crate) use ratio::Scaled;
+pub use ratio::{Exact, Failure, Ratio};
 pub use rounding::{Dropped, Rounding, dropped, rounded};
 
 /// How many bits a whole number held here may be at most: the integer of a `Decimal`, and the
