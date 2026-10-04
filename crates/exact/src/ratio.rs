@@ -22,6 +22,7 @@
 //! whatever layout it has, and reads them back with [`Ratio::from_trusted_parts`].
 
 use crate::WIDEST;
+use crate::amount::Amount;
 use crate::enclosure::Enclosure;
 use crate::magnitude::Magnitude;
 use crate::rounding::{Dropped, Rounding, dropped, rounded};
@@ -61,11 +62,14 @@ pub type Exact<T> = Result<T, Failure>;
 
 /// A decimal as its parts: a sign, the whole number its digits write, and how many of them are
 /// after the point. Nought has no sign.
+///
+/// The crate's own, on the way to an [`Amount`]: a `Decimal` crosses to and from a `Rational` as an
+/// `Amount`, whose whole number is held, and never as parts anything could write.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Scaled {
-    pub negative: bool,
-    pub magnitude: Magnitude,
-    pub scale: i32,
+pub(crate) struct Scaled {
+    pub(crate) negative: bool,
+    pub(crate) magnitude: Magnitude,
+    pub(crate) scale: i32,
 }
 
 /// An exact rational, in the form that has each value once.
@@ -276,14 +280,14 @@ impl Ratio {
     /// `Rational.fromDecimal`: the scale is negated into both exponents and nothing is built from
     /// it.
     ///
-    /// # Panics
-    ///
-    /// Where the decimal's whole number is wider than [`WIDEST`], which no `Decimal` is.
-    pub fn of_decimal(decimal: Scaled) -> Ratio {
-        let exponent = -i128::from(decimal.scale);
+    /// Total, because an [`Amount`]'s whole number is no wider than [`WIDEST`], which is held by how
+    /// one is made.
+    pub fn of_decimal(decimal: &Amount) -> Ratio {
+        let (negative, magnitude, scale) = decimal.split();
+        let exponent = -i128::from(scale);
         Ratio::canonical(
-            decimal.negative,
-            decimal.magnitude,
+            negative,
+            magnitude.clone(),
             Magnitude::ONE,
             exponent,
             exponent,
@@ -736,7 +740,7 @@ impl Ratio {
     ///
     /// Where this has no finite decimal, which is the case the language answers and never a value
     /// read as one.
-    pub fn to_finite_decimal(&self) -> Exact<Scaled> {
+    pub fn to_finite_decimal(&self) -> Exact<Amount> {
         assert!(
             self.has_finite_decimal(),
             "a repeating fraction is answered as a case and never read as a decimal"
@@ -756,7 +760,7 @@ impl Ratio {
             i128::from(self.fives) + i128::from(scale),
             WIDEST,
         )?;
-        Ok(Scaled {
+        decimal(Scaled {
             negative: self.negative,
             magnitude,
             scale,
@@ -772,15 +776,22 @@ impl Ratio {
 
     /// `Rational.toDecimal`: the value at `scale` places, rounded by `mode`. No place where the
     /// scale is not one a `Decimal` has or the value at it is wider than [`WIDEST`].
-    pub fn to_decimal(&self, scale: i64, mode: Rounding) -> Exact<Scaled> {
+    pub fn to_decimal(&self, scale: i64, mode: Rounding) -> Exact<Amount> {
         let scale = i32::try_from(scale).map_err(|_| Failure::NoPlace)?;
         let magnitude = self.rounded_at(scale, mode, WIDEST)?;
-        Ok(Scaled {
+        decimal(Scaled {
             negative: self.negative && !magnitude.is_zero(),
             magnitude,
             scale,
         })
     }
+}
+
+/// The `Decimal` these parts are. Each narrowing works its whole number out within [`WIDEST`], so
+/// this is the `Amount` they make; it is asked of `Amount` all the same, which is the one place a
+/// `Decimal`'s width is held.
+fn decimal(parts: Scaled) -> Exact<Amount> {
+    Amount::of_scaled(parts).ok_or(Failure::NoPlace)
 }
 
 #[cfg(test)]
@@ -801,16 +812,12 @@ mod tests {
         Magnitude::of_u128(n)
     }
 
-    fn decimal(negative: bool, digits: u128, scale: i32) -> Scaled {
-        Scaled {
-            negative: negative && digits != 0,
-            magnitude: small(digits),
-            scale,
-        }
+    fn decimal(negative: bool, digits: u128, scale: i32) -> Amount {
+        Amount::of_magnitude(negative, small(digits), scale).expect("a u128 is held")
     }
 
     fn of_decimal(negative: bool, digits: u128, scale: i32) -> Ratio {
-        Ratio::of_decimal(decimal(negative, digits, scale))
+        Ratio::of_decimal(&decimal(negative, digits, scale))
     }
 
     #[test]
@@ -1113,12 +1120,8 @@ mod tests {
     }
 
     /// The digits as a decimal at `scale`.
-    fn digits_at(digits: &str, scale: i32) -> Scaled {
-        Scaled {
-            negative: false,
-            magnitude: Magnitude::of_digits(digits.as_bytes()),
-            scale,
-        }
+    fn digits_at(digits: &str, scale: i32) -> Amount {
+        Amount::of_digits(false, digits.as_bytes(), scale).expect("a few digits are held")
     }
 
     /// `2^2147483648 / 5^924870866`, which is 1.06569530465881019317…: a value whose parts are one
@@ -1157,8 +1160,8 @@ mod tests {
         );
         // Ordered against a decimal that is close to it too: 1.0656953046588101931 is below, and
         // 1.0656953046588101932 above.
-        let below = Ratio::of_decimal(digits_at("10656953046588101931", 19));
-        let above = Ratio::of_decimal(digits_at("10656953046588101932", 19));
+        let below = Ratio::of_decimal(&digits_at("10656953046588101931", 19));
+        let above = Ratio::of_decimal(&digits_at("10656953046588101932", 19));
         assert_eq!(close.compare(&below), Ok(Ordering::Greater));
         assert_eq!(close.compare(&above), Ok(Ordering::Less));
     }

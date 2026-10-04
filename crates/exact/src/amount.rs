@@ -32,8 +32,10 @@ const SPELT_OUT: i64 = 1000;
 /// A `Decimal`: a sign, the digits as a whole number, and a scale.
 ///
 /// Nought has no sign, so there is one way to hold each value: `-0.0` is read as `0.0`, as the JVM
-/// reads it. The whole number is never wider than [`WIDEST`]: every way of making one that could
-/// be wider says so, by answering nothing.
+/// reads it. The whole number is never wider than [`WIDEST`]. That is held by how one is made, and
+/// not by who makes it: every way of making one from what it is handed answers nothing where the
+/// whole number would be wider, and the one that does not check, [`Amount::from_trusted_parts`],
+/// takes only what [`Amount::with_parts`] gave, and says so in its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Amount {
     negative: bool,
@@ -62,6 +64,28 @@ const LOG2_10: f64 = core::f64::consts::LOG2_10;
 /// The magnitude, where it is no wider than a `Decimal` holds.
 fn held(magnitude: Magnitude) -> Option<Magnitude> {
     (magnitude.bits() <= WIDEST).then_some(magnitude)
+}
+
+/// How many digits these runs write one after another once the zeros in front are left off.
+fn significant(runs: &[&[u8]]) -> u64 {
+    let total: usize = runs.iter().map(|run| run.len()).sum();
+    let leading = runs
+        .iter()
+        .flat_map(|run| run.iter())
+        .take_while(|&&digit| digit == b'0')
+        .count();
+    (total - leading) as u64
+}
+
+/// Whether a whole number written in `significant` digits, the first of them not nought, is surely
+/// wider than `widest` bits, which is known from the count alone and before any of it is read.
+///
+/// Its least value is ten to `significant - 1`, which is more than `(significant - 1) · log2 10`
+/// bits wide; where that is `widest` or more, no value of that many digits is held. The margin is
+/// for the product's rounding, so the answer is never yes for a count some value of which fits.
+/// A count it answers no for may still be too wide, and is settled by the width of the value read.
+fn surely_wider(significant: u64, widest: u64) -> bool {
+    significant > 0 && (significant - 1) as f64 * LOG2_10 >= widest as f64 + 1e-6
 }
 
 /// The magnitude times ten to `by`, where that is no wider than a `Decimal` holds. Refused before
@@ -100,17 +124,8 @@ impl Amount {
 
     /// The value a `Rational` narrowed to a scale is, where its whole number is no wider than a
     /// `Decimal` holds.
-    pub fn of_scaled(parts: Scaled) -> Option<Amount> {
+    pub(crate) fn of_scaled(parts: Scaled) -> Option<Amount> {
         Amount::of_magnitude(parts.negative, parts.magnitude, parts.scale)
-    }
-
-    /// The value as the parts a `Rational` is read from.
-    pub fn scaled(&self) -> Scaled {
-        Scaled {
-            negative: self.negative,
-            magnitude: self.magnitude.clone(),
-            scale: self.scale,
-        }
     }
 
     /// The sign, the magnitude and the scale.
@@ -118,16 +133,25 @@ impl Amount {
         (self.negative, &self.magnitude, self.scale)
     }
 
-    /// The value these parts are: a sign, the magnitude as little-endian bytes, and the scale.
+    /// The value a runtime stored the parts of, read back from where it stored them: a sign, the
+    /// magnitude as little-endian bytes, and the scale.
     ///
-    /// Trusted and not checked against [`WIDEST`]: these are the parts [`Amount::with_parts`] gave
-    /// a runtime to keep, read back from where it kept them.
-    pub fn of_parts(negative: bool, magnitude: &[u8], scale: i32) -> Amount {
-        Amount::new(negative, Magnitude::of_le_bytes(magnitude), scale)
+    /// Trusted and not checked, which is what the name says, as [`crate::Ratio::from_trusted_parts`]
+    /// is: only what [`Amount::with_parts`] gave is a value here, and one wider than [`WIDEST`] is
+    /// one no operation answers for. A debug build checks it; a release build does not, since
+    /// reading a stored value is not an operation and is done on every read.
+    pub fn from_trusted_parts(negative: bool, magnitude: &[u8], scale: i32) -> Amount {
+        let magnitude = Magnitude::of_le_bytes(magnitude);
+        debug_assert!(
+            magnitude.bits() <= WIDEST,
+            "stored parts are a Decimal's, whose whole number is held"
+        );
+        Amount::new(negative, magnitude, scale)
     }
 
-    /// The parts [`Amount::of_parts`] takes, handed to `with` for as long as it runs: the
-    /// magnitude as little-endian bytes, with no zero byte at the top and none at all for nought.
+    /// The parts [`Amount::from_trusted_parts`] takes, handed to `with` for as long as it runs:
+    /// the magnitude as little-endian bytes, with no zero byte at the top and none at all for
+    /// nought.
     pub fn with_parts<T>(&self, with: impl FnOnce(bool, &[u8], i32) -> T) -> T {
         self.magnitude
             .with_le_bytes(|bytes| with(self.negative, bytes, self.scale))
@@ -143,17 +167,21 @@ impl Amount {
     }
 
     /// The whole number these ASCII digits write in decimal, at `scale`: what a runtime reads out
-    /// of text once it has decided where the digits are and what scale they come to.
-    ///
-    /// Not checked against [`WIDEST`]: a run of digits a string or a document holds is narrower
-    /// than it, since a string holds fewer digits than a `Decimal`'s whole number has bits.
-    pub fn of_digits(negative: bool, digits: &[u8], scale: i32) -> Amount {
-        Amount::new(negative, Magnitude::of_digits(digits), scale)
+    /// of text once it has decided where the digits are and what scale they come to. Nothing where
+    /// the whole number is wider than a `Decimal` holds, which is refused from how many digits
+    /// there are before any is read where the count alone says so: a document's number is as long
+    /// as the document, and no string bound holds it.
+    pub fn of_digits(negative: bool, digits: &[u8], scale: i32) -> Option<Amount> {
+        if surely_wider(significant(&[digits]), WIDEST) {
+            return None;
+        }
+        Amount::of_magnitude(negative, Magnitude::of_digits(digits), scale)
     }
 
     /// The value a JSON number writes, at the scale its spelling gives it: as many places as its
     /// fraction has, less its exponent, which is how the JVM reads one (`new BigDecimal(text)`).
-    /// Nothing where that scale is not one a `Decimal` has.
+    /// Nothing where that scale is not one a `Decimal` has, or the whole number its digits write is
+    /// wider than one holds.
     ///
     /// `written` is a number as RFC 8259 writes one, which the document's reader has held it to.
     pub fn of_json_number(written: &[u8]) -> Option<Amount> {
@@ -190,10 +218,14 @@ impl Amount {
         };
         let fraction_digits = i64::try_from(fraction.len()).ok()?;
         let scale = i32::try_from(fraction_digits.checked_sub(exponent)?).ok()?;
+        // Refused before the digits are copied where their count alone says so.
+        if surely_wider(significant(&[whole, fraction]), WIDEST) {
+            return None;
+        }
         let mut digits = Vec::with_capacity(whole.len() + fraction.len());
         digits.extend_from_slice(whole);
         digits.extend_from_slice(fraction);
-        Some(Amount::of_digits(negative, &digits, scale))
+        Amount::of_digits(negative, &digits, scale)
     }
 
     /// The scale, as the value carries it.
@@ -720,10 +752,62 @@ mod tests {
             assert_eq!(one.round(past, mode), None, "{mode:?}");
             assert_eq!(one.divide(&d("1"), past, mode), None, "{mode:?}");
         }
-        assert_eq!(one.add(&Amount::of_parts(false, &[1], past as i32)), None);
         assert_eq!(
-            one.subtract(&Amount::of_parts(false, &[1], past as i32)),
+            one.add(&Amount::from_trusted_parts(false, &[1], past as i32)),
             None
+        );
+        assert_eq!(
+            one.subtract(&Amount::from_trusted_parts(false, &[1], past as i32)),
+            None
+        );
+    }
+
+    /// A count of digits is refused as surely too wide only where every whole number written in
+    /// that many is too wide, and is where the least of them is wider by more than a bit: held to
+    /// what a `u128` says of each power of ten, at every width a `u128` reaches.
+    #[test]
+    fn a_count_of_digits_is_refused_exactly_where_none_of_its_values_is_held() {
+        for widest in 1..=120u64 {
+            for count in 1..=38u64 {
+                let least_bits = u64::from(128 - TENS[(count - 1) as usize].leading_zeros());
+                if surely_wider(count, widest) {
+                    assert!(least_bits > widest, "{count} digits in {widest} bits");
+                }
+                if least_bits > widest + 1 {
+                    assert!(
+                        surely_wider(count, widest),
+                        "{count} digits in {widest} bits"
+                    );
+                }
+            }
+        }
+        // At the widest a `Decimal` holds: the least whole number of 646456994 digits is wider
+        // than it, and some of 646456993 digits are not.
+        assert!(surely_wider(646_456_994, WIDEST));
+        assert!(!surely_wider(646_456_993, WIDEST));
+        assert!(!surely_wider(0, 0));
+    }
+
+    /// Digits are counted without the zeros in front of them, across the runs they are read from.
+    #[test]
+    fn digits_are_counted_from_the_first_that_is_not_nought() {
+        assert_eq!(significant(&[b"0012", b"30"]), 4);
+        assert_eq!(significant(&[b"000", b"0012"]), 2);
+        assert_eq!(significant(&[b"000", b"000"]), 0);
+        assert_eq!(significant(&[b"", b"5"]), 1);
+    }
+
+    /// A whole number read from digits is held to the widest a `Decimal` holds like any other, and
+    /// not left to who wrote the digits: a document's number is as long as the document.
+    #[test]
+    fn digits_read_are_held_to_the_widest() {
+        assert_eq!(
+            Amount::of_digits(false, b"00123", 2).map(|it| shown(&it)),
+            Some(("123".to_string(), 2))
+        );
+        assert_eq!(
+            Amount::of_digits(false, b"000", 2).map(|it| it.is_zero()),
+            Some(true)
         );
     }
 
@@ -864,9 +948,9 @@ mod tests {
         }
         assert_eq!(d("1e-2147483647").plain_text(STRING_HOLDS), None);
         assert_eq!(d("1e2147483647").plain_text(STRING_HOLDS), None);
-        let longest = Amount::of_parts(false, &[1], (STRING_HOLDS - 2) as i32);
+        let longest = Amount::from_trusted_parts(false, &[1], (STRING_HOLDS - 2) as i32);
         assert_eq!(longest.plain_length(), STRING_HOLDS);
-        let past = Amount::of_parts(false, &[1], (STRING_HOLDS - 1) as i32);
+        let past = Amount::from_trusted_parts(false, &[1], (STRING_HOLDS - 1) as i32);
         assert_eq!(past.plain_length(), STRING_HOLDS + 1);
         assert_eq!(past.plain_text(STRING_HOLDS), None);
     }
@@ -896,9 +980,9 @@ mod tests {
             assert_eq!(d(value).external_text(), written, "{value}");
         }
         // The scale stops at its smallest, and the digits it could not drop stay.
-        let floor = Amount::of_parts(false, &[10], i32::MIN);
+        let floor = Amount::from_trusted_parts(false, &[10], i32::MIN);
         assert_eq!(floor.least_digits(), floor);
-        let above = Amount::of_parts(false, &[100], i32::MIN + 1);
+        let above = Amount::from_trusted_parts(false, &[100], i32::MIN + 1);
         assert_eq!(above.least_digits(), floor);
     }
 
@@ -915,7 +999,7 @@ mod tests {
         ] {
             d(value).with_parts(|negative, magnitude, scale| {
                 assert_eq!(
-                    Amount::of_parts(negative, magnitude, scale),
+                    Amount::from_trusted_parts(negative, magnitude, scale),
                     d(value),
                     "{value}"
                 );
@@ -937,10 +1021,10 @@ mod tests {
             "123456789012345678901234567890.1",
         ] {
             let read = d(value);
-            let back = Ratio::of_decimal(read.scaled())
+            let back = Ratio::of_decimal(&read)
                 .to_decimal(i64::from(read.scale()), Rounding::Down)
                 .expect("a value at its own scale");
-            assert_eq!(Amount::of_scaled(back), Some(read.clone()), "{value}");
+            assert_eq!(back, read, "{value}");
         }
     }
 }
